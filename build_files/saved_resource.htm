@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<!-- saved from url=(0099)http://lpost.exchangesolutions.com/cors/?xdm_e=http%3A%2F%2Fwww.build.com&xdm_c=default7284&xdm_p=1 -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+        <title>easyXDM cross-domain XHMLHttpRequest provider</title>
+	    <script src="jquery-1.8.0.min.js" type="text/javascript"></script>
+        <script type="text/javascript" src="easyXDM.min.js">
+            // This should be changed so that it points to the minified version before use in production.
+        </script>
+        <script type="text/javascript">
+            // Update to point to your copy
+            easyXDM.DomHelper.requiresJSON("../js/json2.js");
+        </script>
+        <script type="text/javascript">
+        
+        /* 
+         * This is a CORS (Cross-Origin Resource Sharing) and AJAX enabled endpoint for easyXDM.
+         * The ACL code is adapted from pmxdr (http://github.com/eligrey/pmxdr/) by Eli Grey (http://eligrey.com/)
+         *
+         */
+        // From http://peter.michaux.ca/articles/feature-detection-state-of-the-art-browser-scripting
+        function isHostMethod(object, property){
+            var t = typeof object[property];
+            return t == 'function' ||
+            (!!(t == 'object' && object[property])) ||
+            t == 'unknown';
+        }
+                
+        // this file is by default set up to use Access Control - this means that it will use the headers set by the server to decide whether or not to allow the call to return
+        var useAccessControl = true;
+        // always trusted origins, can be exact strings or regular expressions
+        var alwaysTrustedOrigins = [(/localhost/)];
+        
+		var proxy = function(aUrl, method, headers, data, success, error, useAccessControl, alwaysTrusted) {						
+			var httpMethod = (method || 'GET').toUpperCase(), paramsFound = aUrl.indexOf('?') != -1;
+			var params = '_method=' + httpMethod;
+			var proxied = aUrl + (paramsFound ? '&' : '?') + params;
+					
+			// the "typeof" replacement function
+			var realTypeOf = function(obj) {
+				return Object.prototype.toString.call(obj).slice(8, -1);
+			};
+							
+			var isDataString = (realTypeOf(data) == 'String');
+			var ajaxData = isDataString ? data : (data ? JSON.stringify(data) : "");			
+			
+			var successHandler = function(data, textStatus, jqXHR) {
+				var textJson = $.parseJSON(data);
+
+				// parse the response headers
+				var rawHeaders = jqXHR.getAllResponseHeaders(), headers = {}, headers_lowercase = {}, reHeader = /([\w-_]+):\s+(.*)$/gm, m;
+				while ((m = reHeader.exec(rawHeaders))) {
+					headers_lowercase[m[1].toLowerCase()] = headers[m[1]] = m[2];
+				}
+				
+				if (jqXHR.status < 200 || jqXHR.status >= 300) {
+					if (useAccessControl) {
+						error("INVALID_STATUS_CODE");
+					}
+					else {
+						error("INVALID_STATUS_CODE", {
+							status: jqXHR.status,
+							data: jqXHR.responseText
+						});
+					}
+				}
+				else {
+				
+					var errorMessage;
+					
+					// Internet Explorer versions before 10 drop Response Headers on a 204
+					//    http://www.rajeshsegu.com/2012/10/ie-http-204-status-weirdness/
+					var ieCheck = ($.browser.msie && parseFloat($.browser.version) < 10);
+					var is204 = jqXHR.status == 204;
+					
+					if (useAccessControl && !(ieCheck && is204)) {
+						// normalize the valuse access controls
+						var aclAllowedOrigin = (headers_lowercase["access-control-allow-origin"] || "").replace(/\s/g, "");
+						var aclAllowedMethods = (headers_lowercase["access-control-allow-methods"] || "").replace(/\s/g, "");
+						
+						// determine if origin is trusted
+						if (alwaysTrusted || aclAllowedOrigin == "*" || aclAllowedOrigin.indexOf(remote.origin) != -1) {
+							// determine if the request method was allowed
+							if (aclAllowedMethods && aclAllowedMethods != "*" && aclAllowedMethods.indexOf(config.method) == -1) {
+								errorMessage = "DISALLOWED_REQUEST_METHOD";
+							}
+						}
+						else {
+							errorMessage = "DISALLOWED_ORIGIN";
+						}
+						
+					}
+					
+					if (errorMessage) {
+						error(errorMessage);
+					}
+					else {
+						success({
+							data: data,
+							status: jqXHR.status,
+							headers: headers
+						});
+					}
+				}
+			};
+			
+			var errorHandler = function (jqXHR, textStatus, errorThrown) {		    
+				var timeout = (textStatus && textStatus == 'timeout');
+				var errorText = (textStatus && textStatus == 'error');
+				
+				var publishStatus = true, errorBody = {};
+				if (errorText) {
+				  try {
+					errorBody = jqXHR.responseText ? $.parseJSON(jqXHR.responseText) : {};
+				  } catch(e) {
+					// no valid json
+					publishStatus = false;
+				  }
+				}
+
+				if (errorText) {			
+				  var errors = errorBody.errors || [];
+				  var errorsText = JSON.stringify(errors);
+				  error("SERVICE_ERROR", {
+							status: jqXHR.status,
+							data: errorsText
+						});
+				}
+			};		
+			
+			// apply the request headers
+			var hdrs = {};
+			for (var prop in headers) {
+				if (headers.hasOwnProperty(prop) && headers[prop]) {
+					hdrs[prop] = headers[prop];
+				}
+			}
+			
+			var ajaxMethod = (httpMethod == 'GET') ? 'GET' : 'POST';
+			$.ajax({url: proxied, type:ajaxMethod, headers: hdrs, data: ajaxData,
+				contentType:"application/json; charset=utf-8", dataType:"text",
+				success: successHandler,
+				error: errorHandler
+			});
+		};				
+
+        // instantiate a new easyXDM object which will handle the request 
+        var remote = new easyXDM.Rpc({
+            local: "../name.html",
+            swf: "../swf/easyxdm.swf"
+        }, {
+            local: {
+                // define the exposed method
+                request: function(config, success, error){
+                
+                    // apply default values if not set
+                    easyXDM.apply(config, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            "X-Requested-With": "XMLHttpRequest"
+                        },
+                        success: Function.prototype,
+                        error: function(msg){
+                            throw new Error(msg);
+                        },
+                        data: {},
+                        timeout: 10 * 1000
+                    }, true);
+                    
+                    // set the CORS request header
+                    // only if there is no XHR2 features
+                    if (!window.XMLHttpRequest || !('withCredentials' in (new XMLHttpRequest))) {
+                        config.headers.Origin = remote.origin;
+                    }
+                    
+					config.headers['X-Auth-Host'] = remote.origin;
+					
+                    var isPOST = config.method == "POST";
+                    
+                    // convert the data into a format we can send to the server 
+                    var pairs = [];
+                    for (var key in config.data) {
+                        if (config.data.hasOwnProperty(key)) {
+                            pairs.push(encodeURIComponent(key) + "=" + encodeURIComponent(config.data[key]));
+                        }
+                    }
+                    var data = pairs.join("&");
+
+                    var url = !isPOST && data
+                        ? config.url + (~config.url.indexOf('?') ? '&' : '?') + data
+                        : config.url;
+                    
+                    // check if this origin should always be trusted
+                    var alwaysTrusted = false, i = alwaysTrustedOrigins.length;
+                    while (i-- && !alwaysTrusted) {
+                        if (alwaysTrustedOrigins[i] instanceof RegExp) {
+                            alwaysTrusted = alwaysTrustedOrigins[i].test(remote.origin);
+                        }
+                        else if (typeof alwaysTrustedOrigins[i] == "string") {
+                            alwaysTrusted = (remote.origin === alwaysTrustedOrigins[i]);
+                        }
+                    }
+                    
+					// issue the request
+					proxy(url, config.method, config.headers, isPOST ? config.data : "", success, error, useAccessControl, alwaysTrusted);
+                }
+            }
+        });		
+        </script>
+    </head>
+    <body>
+    
+
+</body></html>
